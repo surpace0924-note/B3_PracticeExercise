@@ -1,0 +1,6 @@
+    fp = open( "VDBEDB", "w")
+
+    VDB.Dump(fp)
+    EDB.Dump(fp)
+
+    fp.close()
