@@ -249,7 +249,7 @@ cv2.namedWindow("PI camera", 1)
 
 # load course and start simulating
 course = cv2.imread("course001reduced.png")
-type(course)
+print(type(course))
 pi_pos = [course.shape[0] / 2, course.shape[1] / 2]  # middle or anywhere within image's border
 rasp_pi = Simulation(course, start_at=pi_pos, speed=pi_speed, real_view_zone=g_win_raw)
 
