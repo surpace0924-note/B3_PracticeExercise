@@ -109,7 +109,7 @@ class Simulation():
                 self.pos[0] += self.speed * np.cos(agl)
                 self.pos[1] -= self.speed * np.sin(agl)
             elif command_vec == (0, 1):  # 'turn left':
-                self.angle -= command_vec[1]
+                self.angle += command_vec[1]
                 self.rotate(self.angle)
             elif command_vec == (0, -1):  # 'turn right':
                 self.angle += command_vec[1]
