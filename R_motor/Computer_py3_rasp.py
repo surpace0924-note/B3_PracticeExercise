@@ -18,15 +18,31 @@ import json
 import pprint
 import csv
 
-robot_pose = [0.0, 0.0, 0.0]
-def send_cmd_reset():
-    # ラズパイにデータ送信
-    response = requests.get('http://192.168.179.8:8888/?reset=reset')
-    response_list = response.text.split(',')
-    robot_pose[0] = float(response_list[0])
-    robot_pose[1] = float(response_list[1])
-    robot_pose[2] = float(response_list[2])
-    print("[info] sent reset cmd")
+
+robot_pose = [0.0, 0.0, 0.0, 0.0]    # ロボットの自己位置[x, y, theta, distance]
+moon_pose = [0.0, 0.0]
+
+def pxToPoseX(px_x, width):
+    m_per_px = 0.000483
+    tmp_x = m_per_px * px_x
+    return tmp_x - width/2 * m_per_px
+def pxToPoseY(px_y, height):
+    m_per_px = 0.0005
+    robot_to_screan = 0.13
+    tmp_y = m_per_px * px_y
+    return height * m_per_px - tmp_y + robot_to_screan
+
+def circle_calc(robot_pose, point_cam):
+    # マシンからの相対座標をワールド座標へ変換
+    # point_cam  が [[x,y], [x,y], ...] ならば
+    point_w = [0, 0]
+    x = point_cam[0]
+    y = point_cam[1]
+    u = np.cos(-robot_pose[2]) * x + np.sin(-robot_pose[2]) * y
+    v = -np.sin(-robot_pose[2]) * x + np.cos(-robot_pose[2]) * y
+    point_w[0] = -robot_pose[0] + u
+    point_w[1] = -robot_pose[1] + v
+    return point_w # ワールド座標でみたカメラのマーカー座標
 
 def send_cmd_direction(vdirect):
     # 機体速度の設定
@@ -60,10 +76,15 @@ def send_cmd_direction(vdirect):
     # ラズパイにデータ送信
     response = requests.get('http://192.168.179.8:8888/?action=' + str(cmd_wheel_speed[0]) + ',' + str(cmd_wheel_speed[1]))
     response_list = response.text.split(',')
-    robot_pose[0] = float(response_list[0])
-    robot_pose[1] = float(response_list[1])
-    robot_pose[2] = float(response_list[2])
-    print("[cmd_wheel_speed] L:" + str(cmd_wheel_speed[0]) + ", R:" + str(cmd_wheel_speed[1]))
+    try:
+        robot_pose[0] = float(response_list[0])
+        robot_pose[1] = float(response_list[1])
+        robot_pose[2] = float(response_list[2])
+        robot_pose[3] = float(response_list[3])
+        # print("[cmd_wheel_speed] L:" + str(cmd_wheel_speed[0]) + ", R:" + str(cmd_wheel_speed[1]))
+    except:
+        print("[error]")
+
 
 
 class HTTPdaemon:
@@ -79,7 +100,7 @@ class HTTPdaemon:
         if 'pose' in query:
             pose = query['pose'][0]
             pose_list = pose.split(',')
-            print(pose_list)
+            # print(pose_list)
 
         response_body = 'Getted Pose'  ###
         status = '200 OK'
@@ -123,8 +144,11 @@ seq_end_time = time.time()
 
 loop_count = 0
 pose_list = []
+marker_list = []
+next_save_distance = 0
+target_marker = [0, 0, 0]
 
-send_cmd_reset()
+intersection_pose_list = []
 
 # main loop　============
 while 1:
@@ -211,10 +235,12 @@ while 1:
         cv_moons = cv2.HoughCircles(img_edge, cv2.HOUGH_GRADIENT, 1, 1000, param1=10, param2=15, minRadius=30, maxRadius=50)
         if cv_moons is not None:
             for i in cv_moons[0,:]:
-                moons.append([i[0], i[1], i[2]])
+                moons.append([pxToPoseX(i[0], img_projection.shape[1]),
+                              pxToPoseY(i[1], img_projection.shape[0]),
+                              i[2]])
                 cv2.circle(img_marker, (i[0],i[1]), np.uint16(i[2]), (0,255,255), 2)    # 囲み線
                 cv2.circle(img_marker, (i[0],i[1]), 2, (0,0,255), 3)                    # 中心点
-            # print(moons)
+            # print("[moon] " + str(moons[0][0]) + ", " + str(moons[0][1]) + ", ")
 
         contours, _ = cv2.findContours(img_binarized, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for i, cnt in enumerate(contours):
@@ -231,6 +257,7 @@ while 1:
             # print(cnt)
 
         circles = []
+        marker_pose_list = []
         cv_circles = cv2.HoughCircles(img_edge, cv2.HOUGH_GRADIENT, 1, 40, param1=10, param2=12, minRadius=9, maxRadius=15)
         if cv_circles is not None:
             for i in cv_circles[0,:]:
@@ -240,10 +267,14 @@ while 1:
 
                     if dist_to_moon > moons[0][2]:
                         circles.append([i[0], i[1], i[2]])
+                        circles_list = [pxToPoseX(i[0], img_projection.shape[1]), pxToPoseY(i[1], img_projection.shape[0])]
+                        marker_pose_list.append(circle_calc(robot_pose, circles_list))
                         cv2.circle(img_marker, (i[0],i[1]), np.uint16(i[2]), (255,255,0), 2)    # 囲み線
                         cv2.circle(img_marker, (i[0],i[1]), 2, (0,0,255), 3)                    # 中心点
                 else:
                     circles.append([i[0], i[1], i[2]])
+                    circles_list = [pxToPoseX(i[0], img_projection.shape[1]), pxToPoseY(i[1], img_projection.shape[0])]
+                    marker_pose_list.append(circle_calc(robot_pose, circles_list))
                     cv2.circle(img_marker, (i[0],i[1]), np.uint16(i[2]), (255,255,0), 2)    # 囲み線
                     cv2.circle(img_marker, (i[0],i[1]), 2, (0,0,255), 3)                    # 中心点
 
@@ -253,6 +284,7 @@ while 1:
 
         # 走行制御
         if moon_detected:
+
             # 月を発見
             if seq_num == 0:
                 # 停止
@@ -262,43 +294,52 @@ while 1:
             elif seq_num == 1:
                 # 待機
                 send_cmd_direction(complex(0.0, 0.0))
-                if time.time() - seq_end_time > 1:
+                if time.time() - seq_end_time > 5:
+                    print("[moon] " + str(moons[0][0]) + ", " + str(moons[0][1]) + ", ")
+                    moon_pose = [pxToPoseX(moons[0][0], img_projection.shape[1]), pxToPoseY(moons[0][1], img_projection.shape[0])]
+                    intersection_pose_list = [circle_calc(robot_pose, moon_pose)]
+                    intersection_pose_list.append(marker_pose_list)
+
                     seq_end_time = time.time()
                     seq_num += 1
             elif seq_num == 2:
                 # 旋回
                 send_cmd_direction(complex(0.0, 0.9))
-                if time.time() - seq_end_time > 1:
+                if time.time() - seq_end_time > 0.8:
                     seq_end_time = time.time()
                     seq_num += 1
             elif seq_num == 3:
                 # 待機
                 send_cmd_direction(complex(0.0, 0.0))
-                if time.time() - seq_end_time > 1:
+                if time.time() - seq_end_time > 5:
+                    intersection_pose_list.append(marker_pose_list)
                     seq_end_time = time.time()
                     seq_num += 1
             elif seq_num == 4:
                 # 旋回
                 send_cmd_direction(complex(0.0, -0.9))
-                if time.time() - seq_end_time > 2:
+                if time.time() - seq_end_time > 1.6:
                     seq_end_time = time.time()
                     seq_num += 1
             elif seq_num == 5:
                 # 待機
                 send_cmd_direction(complex(0.0, 0.0))
-                if time.time() - seq_end_time > 1:
+                if time.time() - seq_end_time > 5:
+                    intersection_pose_list.append(marker_pose_list)
                     seq_end_time = time.time()
                     seq_num += 1
             elif seq_num == 6:
                 # 旋回
                 send_cmd_direction(complex(0.0, 0.9))
-                if time.time() - seq_end_time > 1:
+                if time.time() - seq_end_time > 0.8:
                     seq_end_time = time.time()
                     seq_num += 1
             elif seq_num == 7:
                 # 待機
                 send_cmd_direction(complex(0.0, 0.0))
                 if time.time() - seq_end_time > 1:
+                    print("intersection_pose_list")
+                    print(intersection_pose_list)
                     seq_end_time = time.time()
                     seq_num = 0
                     moon_detected = False
@@ -307,35 +348,35 @@ while 1:
                 if len(circles) > 0:
                     # マーカーが存在する場合
                     # ライントレース
-                    cy_max = [0, 0]
+                    tmp_cy = [0, 10000]
                     for i, circle in enumerate(circles):
-                        if circle[1] > cy_max[1]:
-                            cy_max[1] = circle[1]
-                            cy_max[0] = i
-                    target_pose = circles[cy_max[0]]
-                    error = img_gray.shape[1]/2 - target_pose[0]
+                        error_from_target = abs(circle[1] - img_projection.shape[0]/2)
+                        if error_from_target < tmp_cy[1]:
+                            tmp_cy[1] = error_from_target
+                            tmp_cy[0] = i
+                    target_marker = circles[tmp_cy[0]]
+                    error = img_projection.shape[1]/2 - target_marker[0]
                     turn = error * 0.004
 
                     if time.time() - 1 > Timeout:
-                        send_cmd_direction(complex(0.4, turn))
+                        send_cmd_direction(complex(0.5, turn))
                 else:
                     # マーカーを見失ったとき
                     if time.time() - 1 > Timeout:
                         send_cmd_direction(complex(0.0, 0.8))
 
-
-        print("[robot_pose] " + str(robot_pose[0]) + ", " + str(robot_pose[1]) + ", " + str(robot_pose[2]))
-        if loop_count % 5 == 0:
+        # print("[robot_pose] " + str(robot_pose[0]) + ", " + str(robot_pose[1]) + ", " + str(robot_pose[2]) + ", " + str(robot_pose[3]))
+        if robot_pose[3] > next_save_distance:
             pose = [robot_pose[0], robot_pose[1], robot_pose[2]]
-            pose_list.append(pose)
+            target_marker_pose = [pxToPoseX(target_marker[0], img_projection.shape[1]), pxToPoseX(target_marker[1], img_projection.shape[0])]
+            marker_list.append(circle_calc(robot_pose, target_marker_pose))
+            next_save_distance = robot_pose[3] + 0.05
+            print(marker_list)
 
         # CSV書き込み
         if save_map:
             with open('map.csv', 'w') as f:
                 writer = csv.writer(f)
-                writer.writerows(pose_list)
+                writer.writerows(marker_list)
                 print("[info] map saved")
             save_map = False
-
-
-

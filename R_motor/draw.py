@@ -29,6 +29,7 @@ x = p2[0:, 0]
 y = p2[0:, 1]
 
 ax.scatter(x, y, color=color_list[0])
+ax.scatter(x[0], y[0], color=color_list[1])
 
 # max_val = max(x)
 # if max(y) > max_val:
