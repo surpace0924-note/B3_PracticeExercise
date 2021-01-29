@@ -23,13 +23,14 @@ fig = plt.figure(figsize=(23/2.54, 23/2.54))
 ax = fig.add_subplot(1, 1, 1)
 
 # データの読み込み
-file_name = "map.csv"
+file_name = "map5.csv"
 p2 = np.genfromtxt(file_name, delimiter=',', filling_values=0)
 x = p2[0:, 0]
 y = p2[0:, 1]
 
 ax.scatter(x, y, color=color_list[0])
-ax.scatter(x[0], y[0], color=color_list[1])
+ax.plot(x, y, color=color_list[1])
+# ax.scatter(x[0], y[0], color=color_list[1])
 
 # max_val = max(x)
 # if max(y) > max_val:

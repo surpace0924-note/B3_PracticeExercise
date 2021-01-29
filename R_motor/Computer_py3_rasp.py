@@ -309,16 +309,16 @@ def normalizeAngle(angle):
     return result - math.pi
 
 
-
 robot_pose = [0.0, 0.0, 0.0, 0.0]    # ロボットの自己位置[x, y, theta, distance]
 robot_pose_history = []
-moon_pose = [0.0, 0.0]
+moon_relative_pose = [0.0, 0.0]     # ロボット座標系での月の位置
+moon_pose = [0.0, 0.0]              # ワールド座標系での月の位置
 
-def pxToMeterX(px_x, width):
+def pxXToMeterY(px_x, width):
     m_per_px = 0.000483
     tmp_x = m_per_px * px_x
-    return tmp_x - width/2 * m_per_px
-def pxToMeterY(px_y, height):
+    return -(tmp_x - width/2 * m_per_px)
+def pxYToMeterX(px_y, height):
     m_per_px = 0.0005
     robot_to_screan = 0.13
     tmp_y = m_per_px * px_y
@@ -330,8 +330,10 @@ def toWorldCoordinate(robot_pose, point_cam):
     point_w = [0, 0]
     x = point_cam[0]
     y = point_cam[1]
-    u = np.cos(-robot_pose[2]) * x + np.sin(-robot_pose[2]) * y
-    v = -np.sin(-robot_pose[2]) * x + np.cos(-robot_pose[2]) * y
+    # u = np.cos(-robot_pose[2] + math.radians(90)) * x + np.sin(-robot_pose[2] + math.radians(90)) * y
+    # v = -np.sin(-robot_pose[2] + math.radians(90)) * x + np.cos(-robot_pose[2] + math.radians(90)) * y
+    u = np.cos(-(robot_pose[2] + math.radians(0))) * x + np.sin(-(robot_pose[2] + math.radians(0))) * y
+    v = -np.sin(-(robot_pose[2] + math.radians(0))) * x + np.cos(-(robot_pose[2] + math.radians(0))) * y
     point_w[0] = -robot_pose[0] + u
     point_w[1] = -robot_pose[1] + v
     return point_w # ワールド座標でみたカメラのマーカー座標
@@ -433,6 +435,7 @@ save_map = False
 
 seq_num = 0
 seq_end_time = time.time()
+seq_end_dist = 0.0
 
 loop_count = 0
 pose_list = []
@@ -441,10 +444,16 @@ next_save_distance = 0
 
 intersection_pose_list = []
 
-select_direction = 0
+select_direction = 1
 
 target_moon_pose = []
 target_rad = 0.0
+target_dist = 0.0
+
+moon_detected_num = 0
+turn_val = 0
+
+branch_angle = []
 
 # main loop　============
 while 1:
@@ -501,9 +510,9 @@ while 1:
             save_map = True
         elif key == 49:     # 1: 進む方向
             select_direction = 0
-        elif key == 51:     # 2: 進む方向
+        elif key == 50:     # 2: 進む方向
             select_direction = 1
-        elif key == 52:     # 3: 進む方向
+        elif key == 51:     # 3: 進む方向
             select_direction = 2
 
         start = time.time()
@@ -519,11 +528,11 @@ while 1:
         p_trans = np.float32([[0, 0], [img_gray.shape[1], 0],
                             [0, img_gray.shape[0] + 18*2], [img_gray.shape[1], img_gray.shape[0] + 18*2]])
         M = cv2.getPerspectiveTransform(p_original, p_trans)
-        img_projection = cv2.warpPerspective(img_gray, M, (p_trans[3][0], p_trans[3][1]), borderValue=(255, 255, 255))
+        img_projection = cv2.warpPerspective(img_gray, M, (p_trans[3][0], p_trans[3][1]), borderValue=(130, 130, 130))
         cv2.imshow('img_projection', img_projection)
 
         # エッヂの検出
-        img_edge = cv2.Canny(img_projection,10,100)
+        img_edge = cv2.Canny(img_projection,100,200)
         # cv2.imshow('img_edge', img_edge)
 
         # # 2値化
@@ -544,7 +553,8 @@ while 1:
             moon_px[0] = cv_moons[0][0][0]
             moon_px[1] = cv_moons[0][0][1]
             moon_px[2] = cv_moons[0][0][2]
-            moon_pose = toWorldCoordinate(robot_pose, [pxToMeterX(moon_px[0], fig_width), pxToMeterY(moon_px[1], fig_height)])
+            moon_relative_pose = [pxYToMeterX(moon_px[1], fig_height), pxXToMeterY(moon_px[0], fig_width)]
+            moon_pose = toWorldCoordinate(robot_pose, moon_relative_pose)
             # 描画用画像の作成
             cv2.circle(img_marker, (moon_px[0], moon_px[1]), np.uint16(moon_px[2]), (0,255,255), 2) # 囲み線
             cv2.circle(img_marker, (moon_px[0], moon_px[1]), 2, (0,0,255), 3)                       # 中心点
@@ -562,7 +572,7 @@ while 1:
                         continue
 
                 circle_px.append([cv_cir[0], cv_cir[1], cv_cir[2]])
-                circle_pose.append(toWorldCoordinate(robot_pose, [pxToMeterX(cv_cir[0], fig_width), pxToMeterY(cv_cir[1], fig_height)]))
+                circle_pose.append(toWorldCoordinate(robot_pose, [pxYToMeterX(cv_cir[1], fig_height), pxXToMeterY(cv_cir[0], fig_width)]))
                 # 描画用画像の作成
                 cv2.circle(img_marker, (cv_cir[0],cv_cir[1]), np.uint16(cv_cir[2]), (255,255,0), 2) # 囲み線
                 cv2.circle(img_marker, (cv_cir[0],cv_cir[1]), 2, (0,0,255), 3)                      # 中心点
@@ -570,12 +580,20 @@ while 1:
         # マーカー検出の結果を表示
         cv2.imshow('img_marker', img_marker)
 
+        # 月が見つかった
+        if moon_detected == False:
+            if len(moon_pose) != 0:
+                moon_detected_num += 1
+                if moon_detected_num > 3:
+                    moon_detected = True
+
         # 走行制御
         if moon_detected:
             # 月を発見
             if seq_num == 0:
                 # 停止
                 send_cmd_direction(complex(0.0, 0.0))
+                follow_start = False
                 seq_end_time = time.time()
                 seq_num += 1
 
@@ -583,59 +601,80 @@ while 1:
                 # 2秒経過するまで待機
                 send_cmd_direction(complex(0.0, 0.0))
                 if time.time() - seq_end_time > 2:
-                    intersection_pose_list = moon_pose
-                    intersection_pose_list.append(circle_pose)
                     target_moon_pose = moon_pose
                     get_map([moon_pose], circle_pose)
-                    x = target_moon_pose[0] - robot_pose[0]
-                    y = target_moon_pose[1] - robot_pose[1]
-                    target_rad = math.atan2(y, x)
+                    branch_angle = find_vec2(moon_pose, circle_pose)
+
+                    msg = "angles "
+                    for i, b in enumerate(branch_angle):
+                        msg += str(math.degrees(b)) + " "
+                    print(msg)
+
+                    # dist_to_moon = np.sqrt(moon_relative_pose[0]**2 + moon_relative_pose[1]**2)
+                    dist_to_moon = moon_relative_pose[0]
+                    target_dist = robot_pose[3] + dist_to_moon
+                    turn_val = moon_relative_pose[1] * 4
                     seq_end_time = time.time()
+                    seq_end_dist = robot_pose[3]
                     seq_num += 1
 
             elif seq_num == 2:
-                # 月の方向を向く
-                rad_error = target_rad - robot_pose[2]
-                # if rad_error > np.pi:
-                #     rad_error -= 2*np.pi
-                # if rad_error < -np.pi:
-                #     rad_error += 2*np.pi
+                # 月の位置まで前進
+                send_cmd_direction(complex(0.45, turn_val))
 
-                print(target_rad)
-                print(robot_pose[2])
-                print(rad_error)
-                print(" ")
-                send_cmd_direction(complex(0.0, np.sign(rad_error) * 0.8))
-                if abs(rad_error) < math.radians(10):
+                if robot_pose[3] > target_dist:
+                    # 月に到着
+                    print("[info] moon reach")
                     send_cmd_direction(complex(0.0, 0.0))
+                    seq_end_time = time.time()
+                    seq_num += 1
 
+            elif seq_num == 3:
+                # 進行方向へ旋回
+                send_cmd_direction(complex(0.0, 0.8))
+
+                msg = "angles "
+                for i, b in enumerate(branch_angle):
+                    msg += str(math.degrees(b)) + " "
+                print(msg)
+                print(math.degrees(robot_pose[2]))
+                print(math.degrees(branch_angle[select_direction] - robot_pose[2]))
+                print(select_direction)
+                print(" ")
+
+                if abs(robot_pose[2] - branch_angle[select_direction]) < math.radians(20):
+                    print("[info] direction OK")
+                    send_cmd_direction(complex(0.0, 0.0))
+                    follow_start = True
                     seq_end_time = time.time()
                     seq_num = 0
+                    moon_detected_num = 0
                     moon_detected = False
 
-
-        else:
-            if follow_start:
-                # 点追従処理
-                if len(circle_px) > 0:
-                    # マーカーが存在する場合
-                    # yが一番真ん中に近い点を算出
-                    tmp_cy = [0, 10000]
-                    for i, cir_px in enumerate(circle_px):
-                        error_from_target = abs(cir_px[1] - fig_height/2)
-                        if error_from_target < tmp_cy[1]:
-                            tmp_cy[1] = error_from_target
-                            tmp_cy[0] = i
-                    # 見つけた点と画像中心とのx成分の偏差を計算
-                    error = fig_width/2 - circle_px[tmp_cy[0]][0]
-                    send_cmd_direction(complex(0.5, error * 0.005))
-                else:
-                    # マーカーを見失ったとき
-                    send_cmd_direction(complex(0.0, 0.8))
+        follow_target = []
+        if follow_start:
+            # 点追従処理
+            if len(circle_px) > 0:
+                # マーカーが存在する場合
+                # yが一番真ん中に近い点を算出
+                tmp_cy = [0, 10000]
+                for i, cir_px in enumerate(circle_px):
+                    error_from_target = abs(cir_px[1] - fig_height/2)
+                    if error_from_target < tmp_cy[1]:
+                        tmp_cy[1] = error_from_target
+                        tmp_cy[0] = i
+                # 見つけた点と画像中心とのx成分の偏差を計算
+                follow_target = toWorldCoordinate(robot_pose, circle_px[tmp_cy[0]])
+                error = fig_width/2 - circle_px[tmp_cy[0]][0]
+                send_cmd_direction(complex(0.45, error * 0.004))
+            else:
+                # マーカーを見失ったとき
+                send_cmd_direction(complex(0.0, 0.8))
 
         if robot_pose[3] > next_save_distance:
             pose = [robot_pose[0], robot_pose[1], robot_pose[2]]
             robot_pose_history.append(pose)
+            # robot_pose_history.append(follow_target)
             next_save_distance = robot_pose[3] + 0.05
 
         # CSV書き込み
